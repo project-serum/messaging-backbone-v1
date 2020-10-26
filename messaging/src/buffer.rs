@@ -3,8 +3,10 @@ use crate::error::MessageError;
 
 use solana_sdk::{program_error::ProgramError, pubkey::Pubkey};
 
-const MESSAGE_LENGTH: usize = 256;
-const MESSAGE_HISTORY: usize = 128;
+/// Number of bytes allowed per message
+pub const MESSAGE_LENGTH: usize = 256;
+/// Number of messages kept in the history
+pub const MESSAGE_HISTORY: usize = 128;
 
 /**
  * Basic on-chain message struct - defines layout of the message
@@ -103,5 +105,60 @@ impl Message {
             length,
             bytes,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn construct_basic_message(marker: Option<u8>) -> Message {
+        let mut rval = Message {
+            writer: Pubkey::new_from_array([0; 32]),
+            length: if marker.is_some() { 1 } else { 0 },
+            bytes: [0; MESSAGE_LENGTH],
+        };
+        if let Some(marker) = marker {
+            rval.bytes[0] = marker;
+        }
+        rval
+    }
+
+    fn construct_buffer() -> MessageBuffer {
+        let base = construct_basic_message(None);
+        MessageBuffer {
+            queue_head: 0,
+            messages: [base; MESSAGE_HISTORY],
+        }
+    }
+
+    #[test]
+    fn test_push() {
+        let mut buffer = construct_buffer();
+        let initial = 1 + buffer.queue_head as usize;
+        for i in 0..MESSAGE_HISTORY {
+            assert_eq!(buffer.queue_head, i as u32);
+            buffer.append(&construct_basic_message(Some(i as u8)));
+            assert_eq!(buffer.queue_head, (i + 1) as u32 % MESSAGE_HISTORY as u32);
+            for j in 0..=i {
+                let index = initial + j;
+                let index = index % MESSAGE_HISTORY;
+                assert_eq!(buffer.messages[index].length, 1);
+                assert_eq!(buffer.messages[index].bytes[0], j as u8);
+            }
+
+            for j in (i + 1)..MESSAGE_HISTORY {
+                let index = initial + j;
+                let index = index % MESSAGE_HISTORY;
+                assert_eq!(buffer.messages[index].length, 0);
+                assert_eq!(buffer.messages[index].bytes[0], 0);
+            }
+        }
+        assert_eq!(buffer.queue_head, 0);
+        assert_eq!(buffer.messages[1].length, 1);
+        assert_eq!(buffer.messages[1].bytes[0], 0);
+        buffer.append(&construct_basic_message(Some(MESSAGE_HISTORY as u8)));
+        assert_eq!(buffer.queue_head, 1);
+        assert_eq!(buffer.messages[1].length, 1);
+        assert_eq!(buffer.messages[1].bytes[0], MESSAGE_HISTORY as u8);
     }
 }
