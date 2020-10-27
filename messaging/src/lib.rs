@@ -10,4 +10,4 @@ pub mod error;
 // solana-sdk version
 pub use solana_sdk;
 
-solana_sdk::declare_id!("24CJEtjU3sjzNhzS3NarwcQwbZv68Zbgh1Kh86vQFX2f");
+solana_sdk::declare_id!("FZrii8Bse2T7u6bAXe9UaUSRg5juoFEpJj6XuJmrLQ7J");

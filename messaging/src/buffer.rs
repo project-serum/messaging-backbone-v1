@@ -1,10 +1,10 @@
 //! Super basic messaging buffer with limited history
 use crate::error::MessageError;
 
-use solana_sdk::{program_error::ProgramError, pubkey::Pubkey};
+use solana_sdk::pubkey::Pubkey;
 
 /// Number of bytes allowed per message
-pub const MESSAGE_LENGTH: usize = 256;
+pub const MESSAGE_LENGTH: usize = 255;
 /// Number of messages kept in the history
 pub const MESSAGE_HISTORY: usize = 128;
 
@@ -48,7 +48,7 @@ impl MessageBuffer {
 
 impl MessageBuffer {
     /// Unpacks a buffer of
-    pub fn unpack(input: &mut [u8]) -> Result<&mut MessageBuffer, ProgramError> {
+    pub fn unpack(input: &mut [u8]) -> Result<&mut MessageBuffer, MessageError> {
         if input.len() != std::mem::size_of::<MessageBuffer>() {
             Err(MessageError::MessageQueueAccountWrongSize)?;
         }
@@ -70,7 +70,7 @@ impl MessageBuffer {
 
 impl Message {
     /// Unpacks a
-    pub fn unpack(input: &[u8]) -> Result<Message, ProgramError> {
+    pub fn unpack(input: &[u8]) -> Result<Message, MessageError> {
         if input.len() > std::mem::size_of::<Message>() {
             Err(MessageError::MessageTooLarge)?;
         }
@@ -113,7 +113,7 @@ mod tests {
     use super::*;
     fn construct_basic_message(marker: Option<u8>) -> Message {
         let mut rval = Message {
-            writer: Pubkey::new_from_array([0; 32]),
+            writer: Pubkey::new_from_array([marker.unwrap_or(0); 32]),
             length: if marker.is_some() { 1 } else { 0 },
             bytes: [0; MESSAGE_LENGTH],
         };
@@ -131,6 +131,14 @@ mod tests {
         }
     }
 
+    fn check_error(expected: MessageError, minput: Result<Message, MessageError>) {
+        match minput {
+            Ok(_) => panic!("Expected {}", expected),
+            Err(e) => assert_eq!(expected, e)
+
+        }
+    }
+
     #[test]
     fn test_push() {
         let mut buffer = construct_buffer();
@@ -138,7 +146,7 @@ mod tests {
         for i in 0..MESSAGE_HISTORY {
             assert_eq!(buffer.queue_head, i as u32);
             buffer.append(&construct_basic_message(Some(i as u8)));
-            assert_eq!(buffer.queue_head, (i + 1) as u32 % MESSAGE_HISTORY as u32);
+            assert_eq!(buffer.queue_head, (i+1) as u32 % MESSAGE_HISTORY as u32);
             for j in 0..=i {
                 let index = initial + j;
                 let index = index % MESSAGE_HISTORY;
@@ -146,7 +154,7 @@ mod tests {
                 assert_eq!(buffer.messages[index].bytes[0], j as u8);
             }
 
-            for j in (i + 1)..MESSAGE_HISTORY {
+            for j in (i+1)..MESSAGE_HISTORY {
                 let index = initial + j;
                 let index = index % MESSAGE_HISTORY;
                 assert_eq!(buffer.messages[index].length, 0);
@@ -160,5 +168,68 @@ mod tests {
         assert_eq!(buffer.queue_head, 1);
         assert_eq!(buffer.messages[1].length, 1);
         assert_eq!(buffer.messages[1].bytes[0], MESSAGE_HISTORY as u8);
+    }
+
+    #[test]
+    fn test_unpack() {
+        let orig_message = construct_basic_message(Some(1));
+        let bytes = unsafe {
+            std::slice::from_raw_parts(&orig_message as *const _ as *const u8, std::mem::size_of::<Message>())
+        };
+        let message = Message::unpack(bytes).unwrap();
+        assert_eq!(message.writer, orig_message.writer);
+        assert_eq!(message.length, orig_message.length);
+        assert!(message.bytes.iter().zip(orig_message.bytes.iter()).all(|(a, b)| *a == *b));
+    }
+
+    #[test]
+    fn test_unpack_all_zero() {
+        let mut orig_message = construct_basic_message(None);
+        orig_message.length = MESSAGE_LENGTH as u8;
+        let bytes = unsafe {
+            std::slice::from_raw_parts(&orig_message as *const _ as *const u8, std::mem::size_of::<Message>())
+        };
+        let message = Message::unpack(bytes).unwrap();
+        assert_eq!(message.writer, orig_message.writer);
+        assert_eq!(message.length, orig_message.length);
+        assert!(message.bytes.iter().zip(orig_message.bytes.iter()).all(|(a, b)| *a == *b));
+    }
+
+    #[test]
+    fn test_unpack_large() {
+        let orig_message = construct_basic_message(Some(1));
+        let big = [orig_message, orig_message];
+        let bytes = unsafe {
+            std::slice::from_raw_parts(&big as *const _ as *const u8, std::mem::size_of::<[Message; 2]>())
+        };
+        check_error(MessageError::MessageTooLarge, Message::unpack(bytes));
+    }
+
+    #[test]
+    fn test_unpack_small() {
+        let orig_message = construct_basic_message(Some(1));
+        let bytes = unsafe {
+            std::slice::from_raw_parts(&orig_message as *const _ as *const u8, std::mem::size_of::<Message>())
+        };
+        check_error(MessageError::MessageTooSmall, Message::unpack(&bytes[1..]));
+    }
+
+    #[test]
+    fn test_unpack_short_length() {
+        let mut orig_message = construct_basic_message(Some(1));
+        orig_message.bytes[1] = 2;
+        let bytes = unsafe {
+            std::slice::from_raw_parts(&orig_message as *const _ as *const u8, std::mem::size_of::<Message>())
+        };
+        check_error(MessageError::MessageLengthTooSmall, Message::unpack(bytes));
+    }
+
+    #[test]
+    fn test_unpack_empty() {
+        let orig_message = construct_basic_message(None);
+        let bytes = unsafe {
+            std::slice::from_raw_parts(&orig_message as *const _ as *const u8, std::mem::size_of::<Message>())
+        };
+        check_error(MessageError::MessageEmpty, Message::unpack(bytes));
     }
 }
